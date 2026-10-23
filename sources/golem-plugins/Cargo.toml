@@ -1,0 +1,9 @@
+# Les plugins audio de GoleM (docs/spectral.md) — un workspace Rust sur nih-plug, construit par
+# provision/install-spectral.sh (`cargo xtask bundle <crate> --release` → CLAP + VST3 dans target/bundled/).
+[workspace]
+resolver = "2"
+members = ["golem_freeze", "xtask"]
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

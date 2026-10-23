@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Builds the Linux plugins golem installs (build/linux/build.sh) on Ubuntu 24.04 and publishes them as one release.
+# Run it by hand: Actions ▸ linux-plugins ▸ Run workflow, with the release tag (e.g. linux-plugins-v1).
+name: linux-plugins
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create (e.g. linux-plugins-v1)"
+        required: true
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: [zconvo, nam, prisma, spectral, paulxstretch, freeze]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dependencies (the same packages as golem's provision/install-*.sh)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential cmake git pkg-config curl \
+            lv2-dev libsndfile1-dev libsamplerate0-dev libfftw3-dev \
+            libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev \
+            libfreetype-dev libfontconfig1-dev libgl1-mesa-dev libcurl4-openssl-dev \
+            libx11-xcb-dev libxcb-icccm4-dev libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxcb-dri2-0-dev libxcb-dri3-dev
+      - name: Build ${{ matrix.plugin }}
+        run: build/linux/build.sh out ${{ matrix.plugin }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.plugin }}
+          path: out/
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir out && find dl -type f -exec cp {} out/ \;
+          (cd out && cat BUILDINFO-*.txt > BUILDINFO.txt && rm BUILDINFO-*.txt && sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS)
+          {
+            echo "Linux plugins built from pinned upstream commits by [build/linux/build.sh](build/linux/build.sh) on Ubuntu 24.04 x86_64,"
+            echo "run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
+            echo; echo '```'; cat out/BUILDINFO.txt; echo; cat out/SHA256SUMS; echo '```'
+          } > notes.md
+          gh release create "${{ inputs.tag }}" out/* --title "Linux plugins (${{ inputs.tag }})" --notes-file notes.md --target "${{ github.sha }}"

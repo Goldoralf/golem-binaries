@@ -1,0 +1,106 @@
+diff --git a/src/nam_plugin.cpp b/src/nam_plugin.cpp
+index aa3f769..5888d1e 100644
+--- a/src/nam_plugin.cpp
++++ b/src/nam_plugin.cpp
+@@ -38,6 +38,7 @@ namespace NAM {
+ 
+ 	Plugin::~Plugin()
+ 	{
++		drain_retired();                                          // golem : les modèles retirés pas encore détruits
+ 		delete currentModel;
+ 	}
+ 
+@@ -101,9 +102,22 @@ namespace NAM {
+ 	}
+ 
+ 	// runs on non-RT, can block or use [de]allocations
++	void Plugin::drain_retired() noexcept
++	{
++		int n = 0;
++		for (int i = 0; i < kRetiredSlots; i++)
++		{
++			NeuralAudio::NeuralModel* m = retired[i].exchange(nullptr);
++			if (m != nullptr) { delete m; n++; }
++		}
++		if (n > 0)
++			lv2_log_trace(&logger, "golem: %d retired model(s) freed by the worker\n", n);
++	}
++
+ 	LV2_Worker_Status Plugin::work(LV2_Handle instance, LV2_Worker_Respond_Function respond, LV2_Worker_Respond_Handle handle,
+ 		uint32_t size, const void* data)
+ 	{
++		static_cast<NAM::Plugin*>(instance)->drain_retired();     // golem : hors fil audio, les modèles retirés
+ 		switch (*(const LV2WorkType*)data)
+ 		{
+ 			case kWorkTypeLoad:
+@@ -181,8 +195,8 @@ namespace NAM {
+ 		auto msg = static_cast<const LV2SwitchModelMsg*>(data);
+ 		auto nam = static_cast<NAM::Plugin*>(instance);
+ 
+-		// prepare reply for deleting old model
+-		LV2FreeModelMsg reply = { kWorkTypeFree, nam->currentModel };
++		// golem : l'ancien modèle part au CASIER (vidé par le worker), plus en message FREE (voir nam_plugin.h)
++		NeuralAudio::NeuralModel* retiring = nam->currentModel;
+ 
+ 		// swap current model with new one
+ 		nam->currentModel = msg->model;
+@@ -201,8 +215,17 @@ namespace NAM {
+ 			}
+ 		}
+ 
+-		// send reply
+-		nam->schedule->schedule_work(nam->schedule->handle, sizeof(reply), &reply);
++		if (retiring != nullptr)
++		{
++			bool parked = false;
++			for (int i = 0; i < NAM::Plugin::kRetiredSlots && !parked; i++)
++			{
++				NeuralAudio::NeuralModel* expected = nullptr;
++				parked = nam->retired[i].compare_exchange_strong(expected, retiring);
++			}
++			// casier plein (le worker n'a pas tourné pendant 8 échanges) : le modèle est ABANDONNÉ plutôt que détruit ici
++			// (fil audio) ou confié à un dépôt depuis un fil inconnu — une fuite bornée, jamais un crash
++		}
+ 
+ 		// report change to host/ui
+ 		nam->write_current_path();
+@@ -519,8 +542,12 @@ namespace NAM {
+ 
+ 		if (result == LV2_STATE_SUCCESS)
+ 		{
+-			// Schedule model to be loaded by the provided worker
+-			nam->schedule->schedule_work(nam->schedule->handle, sizeof(msg), &msg);
++			// golem : restore() tourne sur le fil PRINCIPAL ; le planificateur de l'instance est fait pour run(). L'hôte passe à
++			// restore() le sien, sûr dans ce contexte (LV2 state) — REAPER le fournit à chaque restauration (mesuré : 364/364).
++			LV2_Worker_Schedule* sched = (LV2_Worker_Schedule*)lv2_features_data(features, LV2_WORKER__schedule);
++			if (sched == nullptr)
++				sched = nam->schedule;
++			sched->schedule_work(sched->handle, sizeof(msg), &msg);
+ 
+ 			nam->currentModelPath = msg.path;
+ 		}
+diff --git a/src/nam_plugin.h b/src/nam_plugin.h
+index 9a8a9ca..fcc78c7 100644
+--- a/src/nam_plugin.h
++++ b/src/nam_plugin.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <array>
++#include <atomic>
+ #include <cstddef>
+ #include <cstdint>
+ #include <random>
+@@ -73,6 +74,12 @@ namespace NAM {
+ 
+ 		NeuralAudio::NeuralModelLoader loader;
+ 		NeuralAudio::NeuralModel* currentModel = nullptr;
++		// golem (2026-10-14) : les modèles RETIRÉS par work_response, détruits plus tard par le worker. work_response ne
++		// dépose plus de travail : REAPER l'appelle parfois sur son fil PRINCIPAL (instance retirée), et deux producteurs
++		// simultanés sur sa file de travaux la corrompent (double free, GPF dans Reaper ou dans Process).
++		static constexpr int kRetiredSlots = 8;
++		std::atomic<NeuralAudio::NeuralModel*> retired[kRetiredSlots] = {};
++		void drain_retired() noexcept;
+ 		std::string currentModelPath;
+ 		float prevDCInput = 0;
+ 		float prevDCOutput = 0;
