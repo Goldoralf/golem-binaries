@@ -16,7 +16,7 @@ WANT=("$@")
 WORK="${WORK:-$ROOT/.work}"; mkdir -p "$WORK"
 JOBS=$(nproc)
 
-ZC_REPO=https://github.com/x42/zconvo.lv2.git;                    ZC_COMMIT=c6b88d5ff0ac003c3ce54a5d7f4d6845365b91c8   # v0.7.2
+ZC_REPO=https://github.com/x42/zconvo.lv2.git;                    ZC_COMMIT=05405cb508ec19ab725081e12dbf9979c6e95ae5   # v0.7.2 + upstream fix of issue #12
 NAM_REPO=https://github.com/mikeoliphant/neural-amp-modeler-lv2.git; NAM_COMMIT=35c28a52ec0a89af16208e953544dc96e13dde20  # v0.2.2
 VSTS_REPO=https://github.com/unplugred/vsts.git;                  VSTS_COMMIT=5062b597b01d11507ed60ac9a7e0e7ad6dcfd63f  # Prisma
 NIH_REPO=https://github.com/robbert-vdh/nih-plug.git;             NIH_COMMIT=de421011f41a6d10fc8c7a6084e4f4dee0143683   # Spectral Compressor
@@ -41,13 +41,14 @@ checkout() {   # checkout <repo> <commit> <dir> — submodules retried: gitlab.c
 }
 
 build_zconvo() {
-  echo "== zeroconvo.lv2 (x42 IR convolver) + patches/zconvo-retired-engines.patch"
+  # upstream 05405cb fixes the double state restore (x42/zconvo.lv2#12) that our retired-engines patch worked around
+  echo "== zeroconvo.lv2 (x42 IR convolver), upstream $ZC_COMMIT"
   local d="$WORK/zconvo.lv2"
   checkout "$ZC_REPO" "$ZC_COMMIT" "$d"
-  git -C "$d" apply "$ROOT/patches/zconvo-retired-engines.patch"
   make -C "$d" -j"$JOBS" >/dev/null                       # upstream flags: -O3 -msse -msse2, -DNDEBUG
-  grep -q "retired engine" "$d/build/zeroconvolv.so"
   rm -rf "$WORK/stage-zc" && make -C "$d" install LV2DIR="$WORK/stage-zc" >/dev/null
+  # the commit it was built from, read back by golem's install-zconvo.sh (the fix leaves no string in the binary)
+  echo "x42/zconvo.lv2 $ZC_COMMIT" > "$WORK/stage-zc/zeroconvo.lv2/golem-build.txt"
   pack zeroconvo.lv2 "$WORK/stage-zc" zeroconvo.lv2
 }
 
@@ -107,14 +108,29 @@ build_freeze() {
 
 for p in "${WANT[@]}"; do "build_$p"; done
 
+# Which bundles need x86-64-v3 (AVX2/FMA)? A v3 binary kills REAPER on an older CPU with "trap invalid opcode" and
+# nothing in its log (Ivy Bridge laptop, 2026-11-03); golem's install scripts must gate those behind cpu_x86_64_v3.
+# The release states it, bundle by bundle, from the instructions actually present.
+isa_report() {
+  local f n
+  for f in "$OUT"/*.tar.gz; do
+    rm -rf "$WORK/isa" && mkdir -p "$WORK/isa" && tar -xzf "$f" -C "$WORK/isa"
+    n=$(find "$WORK/isa" -type f \( -name '*.so' -o -name '*.clap' \) -exec objdump -d --no-show-raw-insn {} \; 2>/dev/null \
+        | grep -cE '\bvfmadd|\bvpbroadcast[bwdq]|\bvpermq|\bshlx' || true)
+    if [ "$n" -gt 0 ]; then echo "$(basename "$f" .tar.gz): needs x86-64-v3 ($n AVX2/FMA instructions)"
+    else echo "$(basename "$f" .tar.gz): baseline x86-64"; fi
+  done
+}
+
 {
   echo "Built on $(. /etc/os-release && echo "$PRETTY_NAME") $(uname -m), $(date -u +%Y-%m-%dT%H:%MZ)"
   echo "gcc: $(gcc -dumpfullversion)   cmake: $(cmake --version | head -1 | awk '{print $3}')   rustc: $(rustc --version 2>/dev/null | awk '{print $2}')"
-  echo "zconvo.lv2 $ZC_COMMIT + patches/zconvo-retired-engines.patch"
+  echo "zconvo.lv2 $ZC_COMMIT (upstream, no patch)"
   echo "neural-amp-modeler-lv2 $NAM_COMMIT + patches/nam-thread-safe-worker.patch (-march=x86-64-v3)"
   echo "unplugred/vsts $VSTS_COMMIT (Prisma, BANNERTYPE=0)"
   echo "nih-plug $NIH_COMMIT (spectral_compressor, without standalone)"
   echo "paulxstretch $PXS_COMMIT (JUCE_JACK=0, VST3 + CLAP)"
   echo "golem-plugins (golem_freeze) from this repository, $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
+  isa_report
 } > "$OUT/BUILDINFO-$(IFS=-; echo "${WANT[*]}").txt"
 (cd "$OUT" && sha256sum ./*.tar.gz | sed 's| \./| |')

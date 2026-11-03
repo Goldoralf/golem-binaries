@@ -12,7 +12,7 @@ builds the same pinned commits itself.
 
 | Release | What | Built from | License |
 |---|---|---|---|
-| `linux-plugins-v*` | `zeroconvo.lv2` — x42 IR convolver, with [our patch](patches/zconvo-retired-engines.patch) (crash on rapid preset changes) | [x42/zconvo.lv2](https://github.com/x42/zconvo.lv2) `c6b88d5` (v0.7.2) | GPL-2.0-or-later |
+| `linux-plugins-v*` | `zeroconvo.lv2` — x42 IR convolver, unmodified (from v2: upstream carries the fix for rapid preset changes, x42/zconvo.lv2#12; v1 had our patch) | [x42/zconvo.lv2](https://github.com/x42/zconvo.lv2) `05405cb` | GPL-2.0-or-later |
 | | `neural_amp_modeler.lv2` — NAM, with [our patch](patches/nam-thread-safe-worker.patch) (crash on rapid patch changes), `-march=x86-64-v3` | [mikeoliphant/neural-amp-modeler-lv2](https://github.com/mikeoliphant/neural-amp-modeler-lv2) `35c28a5` (v0.2.2) | GPL-3.0 |
 | | `Prisma.vst3` — multiband distortion (free variant) | [unplugred/vsts](https://github.com/unplugred/vsts) `5062b59` | AGPL-3.0 |
 | | `Spectral Compressor` (VST3, CLAP), without its standalone | [robbert-vdh/nih-plug](https://github.com/robbert-vdh/nih-plug) `de42101` | GPL-3.0-or-later |
