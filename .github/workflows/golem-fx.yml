@@ -23,7 +23,7 @@ jobs:
             name: linux-x86_64
           - os: windows-2022
             name: windows-x86_64
-          - os: macos-14
+          - os: macos-latest
             name: macos-universal
     runs-on: ${{ matrix.os }}
     defaults:
