@@ -103,4 +103,4 @@ jobs:
             echo; echo '```'; cat out/BUILDINFO.txt; echo; cat out/SHA256SUMS; echo '```'
           } > notes.md
           gh release create "golem-fx-${{ inputs.ref }}" out/* --repo "${{ github.repository }}" \
-            --title "golem-fx ${{ inputs.ref }} (VST3: Linux, Windows, macOS)" --notes-file notes.md --target "${{ github.sha }}"
+            --title "golem-fx ${{ inputs.ref }} (VST3: Linux, Windows, macOS)" --notes-file notes.md --latest=false --target "${{ github.sha }}"
