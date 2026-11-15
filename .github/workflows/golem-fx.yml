@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Builds golem's own effects (golem-fx, https://github.com/Goldoralf/golem-fx) as VST3 for Linux, Windows and macOS
+# from one golem-fx tag, and publishes them as one release: one archive per OS, SHA256SUMS, BUILDINFO.txt.
+# Run it by hand: Actions ▸ golem-fx ▸ Run workflow, with the golem-fx tag (e.g. 0.4); the release is golem-fx-<tag>.
+name: golem-fx
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "golem-fx tag to build (e.g. 0.4)"
+        required: true
+permissions:
+  contents: write
+env:
+  CARGO_TERM_COLOR: never
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: linux-x86_64
+          - os: windows-2022
+            name: windows-x86_64
+          - os: macos-14
+            name: macos-universal
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Goldoralf/golem-fx
+          ref: ${{ inputs.ref }}
+          path: golem-fx
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential pkg-config libasound2-dev libgl-dev libjack-jackd2-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxcb-dri2-0-dev libxcb-icccm4-dev libxcursor-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          if [ "${{ runner.os }}" = macOS ]; then rustup target add x86_64-apple-darwin aarch64-apple-darwin; fi
+      - name: Bundle every pedal (bundler.toml, without dev tools)
+        working-directory: golem-fx
+        run: |
+          # Every [gfx-*] section of bundler.toml is a pedal; gfx-gapmeter is a measuring probe, not a block.
+          pkgs=$(grep -oE '^\[gfx-[a-z0-9-]+\]' bundler.toml | tr -d '[]' | grep -vx 'gfx-gapmeter')
+          args=$(for p in $pkgs; do printf -- '-p %s ' "$p"; done)
+          if [ "${{ runner.os }}" = macOS ]; then cmd=bundle-universal; else cmd=bundle; fi
+          cargo xtask $cmd $args --release
+          echo "$pkgs" > ../pedals.txt
+      - name: Ad-hoc code signature (macOS, required on Apple silicon)
+        if: runner.os == 'macOS'
+        working-directory: golem-fx/target/bundled
+        run: for b in *.vst3; do codesign --force --deep --sign - "$b"; done
+      - name: Archive
+        run: |
+          mkdir out
+          cd golem-fx/target/bundled
+          if [ "${{ runner.os }}" = Windows ]; then
+            7z a -tzip "../../../out/golem-fx-${{ matrix.name }}.zip" ./*.vst3 > /dev/null
+          else
+            tar czf "../../../out/golem-fx-${{ matrix.name }}.tar.gz" ./*.vst3
+          fi
+          cd ../../..
+          {
+            echo "[${{ matrix.name }}] golem-fx $(git -C golem-fx rev-parse HEAD) (tag ${{ inputs.ref }}), runner ${{ matrix.os }}"
+            echo "  $(rustc --version), $(cargo --version)"
+            echo "  $(ls golem-fx/target/bundled | grep -c '\.vst3$') VST3: $(tr '\n' ' ' < pedals.txt)"
+          } > "out/BUILDINFO-${{ matrix.name }}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: out/
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir out && find dl -type f -exec cp {} out/ \;
+          (cd out && cat BUILDINFO-*.txt > BUILDINFO.txt && rm BUILDINFO-*.txt \
+            && sha256sum ./*.tar.gz ./*.zip | sed 's| \./| |' > SHA256SUMS)
+          {
+            echo "golem's own effects, built from [golem-fx](https://github.com/Goldoralf/golem-fx/tree/${{ inputs.ref }}) tag \`${{ inputs.ref }}\`"
+            echo "(GPL-3.0-or-later; the source is that tag) by [.github/workflows/golem-fx.yml](.github/workflows/golem-fx.yml),"
+            echo "run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
+            echo "macOS bundles are universal (x86_64 + arm64) with an ad-hoc signature, not notarized."
+            echo; echo '```'; cat out/BUILDINFO.txt; echo; cat out/SHA256SUMS; echo '```'
+          } > notes.md
+          gh release create "golem-fx-${{ inputs.ref }}" out/* --repo "${{ github.repository }}" \
+            --title "golem-fx ${{ inputs.ref }} (VST3: Linux, Windows, macOS)" --notes-file notes.md --target "${{ github.sha }}"
