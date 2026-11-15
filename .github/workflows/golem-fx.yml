@@ -52,9 +52,11 @@ jobs:
         run: |
           # Every [gfx-*] section of bundler.toml is a pedal; gfx-gapmeter is a measuring probe, not a block.
           pkgs=$(grep -oE '^\[gfx-[a-z0-9-]+\]' bundler.toml | tr -d '[]' | grep -vx 'gfx-gapmeter')
-          args=$(for p in $pkgs; do printf -- '-p %s ' "$p"; done)
+          # One package per call: a few pedals reuse another pedal's processor (gfx-transient → gfx-limiter,
+          # gfx-mbcomp → gfx-comp…) without its plugin feature, and building them together would unify the
+          # features and link two VST3 entry points into one library.
           if [ "${{ runner.os }}" = macOS ]; then cmd=bundle-universal; else cmd=bundle; fi
-          cargo xtask $cmd $args --release
+          for p in $pkgs; do cargo xtask $cmd "$p" --release; done
           echo "$pkgs" > ../pedals.txt
       - name: Ad-hoc code signature (macOS, required on Apple silicon)
         if: runner.os == 'macOS'
