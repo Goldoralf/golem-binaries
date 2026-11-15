@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Builds golem's own effects (golem-fx, https://github.com/Goldoralf/golem-fx) as VST3 for Linux, Windows and macOS
-# from one golem-fx tag, and publishes them as one release: one archive per OS, SHA256SUMS, BUILDINFO.txt.
+# from one golem-fx tag, and publishes them as one release: one archive per OS, the factory presets as
+# .vstpreset (golem-fx-vstpresets.zip), SHA256SUMS, BUILDINFO.txt.
 # Run it by hand: Actions ▸ golem-fx ▸ Run workflow, with the golem-fx tag (e.g. 0.4); the release is golem-fx-<tag>.
 name: golem-fx
 on:
@@ -88,11 +89,27 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dl
+      - uses: actions/checkout@v4
+        with:
+          repository: Goldoralf/golem-fx
+          ref: ${{ inputs.ref }}
+          path: golem-fx
+      - name: Factory presets as VST3 presets (.vstpreset)
+        run: |
+          # golem-fx's exporter (stdlib Python) writes <out>/GoleM/<Plugin>/<Preset>.vstpreset; the zip holds
+          # the GoleM folder, to unzip into the OS's VST3 preset folder (golem-fx presets/README.md).
+          # Tags older than the exporter have none: the release then goes out without it.
+          mkdir presets-out
+          if [ -f golem-fx/tools/export-vstpresets.py ]; then
+            python3 golem-fx/tools/export-vstpresets.py --out vstpresets
+            (cd vstpresets && zip -qrX ../presets-out/golem-fx-vstpresets.zip GoleM)
+          fi
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir out && find dl -type f -exec cp {} out/ \;
+          if [ -f presets-out/golem-fx-vstpresets.zip ]; then cp presets-out/golem-fx-vstpresets.zip out/; fi
           (cd out && cat BUILDINFO-*.txt > BUILDINFO.txt && rm BUILDINFO-*.txt \
             && sha256sum ./*.tar.gz ./*.zip | sed 's| \./| |' > SHA256SUMS)
           {
@@ -100,6 +117,10 @@ jobs:
             echo "(GPL-3.0-or-later; the source is that tag) by [.github/workflows/golem-fx.yml](.github/workflows/golem-fx.yml),"
             echo "run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
             echo "macOS bundles are universal (x86_64 + arm64) with an ad-hoc signature, not notarized."
+            if [ -f out/golem-fx-vstpresets.zip ]; then
+              echo "\`golem-fx-vstpresets.zip\`: the factory presets as VST3 presets, a \`GoleM\` folder to unzip into the OS's VST3 preset folder"
+              echo "(see [presets/README.md](https://github.com/Goldoralf/golem-fx/blob/${{ inputs.ref }}/presets/README.md#presets-in-a-daw))."
+            fi
             echo; echo '```'; cat out/BUILDINFO.txt; echo; cat out/SHA256SUMS; echo '```'
           } > notes.md
           gh release create "golem-fx-${{ inputs.ref }}" out/* --repo "${{ github.repository }}" \
