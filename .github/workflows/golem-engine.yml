@@ -30,6 +30,10 @@ jobs:
           repository: Goldoralf/golem-engine
           ref: ${{ inputs.ref }}
           path: engine
+          # the whole history and its tags: the build reads its version with `git describe` (Ardour's tag 9.9 …).
+          # A release tag of the engine must be LIGHTWEIGHT — an annotated one would be what describe returns, and
+          # the build does not parse it.
+          fetch-depth: 0
       - name: Build and package (the engine's own script)
         working-directory: engine
         run: |
