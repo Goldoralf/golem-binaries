@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Builds the Golem Engine (golem's own audio engine, https://github.com/Goldoralf/golem-engine, built from Ardour,
+# GPL-2.0-or-later) from one of its tags and publishes its self-contained package: what golem's installer places in
+# ~/opt/golem-engine. Linux x86_64 for now; Windows and macOS get their job when the engine is ported.
+# The build runs in a container of the OLDEST distribution golem supports: the package needs at least the glibc it
+# was built with. To run it: Actions ▸ golem-engine ▸ Run workflow, with the engine's tag (e.g.
+# golem-engine-9.9-g1); the release has the same name.
+name: golem-engine
+run-name: golem-engine ${{ inputs.ref }}
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "golem-engine tag to build (e.g. golem-engine-9.9-g1)"
+        required: true
+permissions:
+  contents: write
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    steps:
+      - name: git (the container has none; the package records its exact commit)
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git ca-certificates
+          git config --global --add safe.directory '*'
+      - uses: actions/checkout@v4
+        with:
+          repository: Goldoralf/golem-engine
+          ref: ${{ inputs.ref }}
+          path: engine
+      - name: Build and package (the engine's own script)
+        working-directory: engine
+        run: |
+          ref="${{ inputs.ref }}"
+          golem/tools/ci-build.sh "${ref#golem-engine-}"
+      - name: Start it once (dummy backend) — a package that does not start is not published
+        working-directory: engine
+        run: |
+          mkdir -p /tmp/pkg /tmp/root/presets
+          tar xzf build/bundle/golem-engine-*.tar.gz -C /tmp/pkg
+          (timeout 60 /tmp/pkg/*/golem/engine/run.sh /tmp/root /tmp/root/sets/golem-engine "None (Dummy)" > /tmp/engine.log 2>&1 &)
+          for i in $(seq 1 45); do grep -q "démarré" /tmp/root/presets/.watch.log 2>/dev/null && break; sleep 1; done
+          cat /tmp/root/presets/.watch.log || true
+          grep -q "démarré" /tmp/root/presets/.watch.log || { tail -30 /tmp/engine.log; exit 1; }
+          if grep -q "ÉCHEC" /tmp/root/presets/.watch.log; then exit 1; fi
+      - name: Archive
+        run: |
+          mkdir out
+          cp engine/build/bundle/golem-engine-*.tar.gz out/golem-engine-linux-x86_64.tar.gz
+          {
+            echo "[linux-x86_64] golem-engine $(git -C engine rev-parse HEAD) (tag ${{ inputs.ref }}), container ubuntu:22.04"
+            echo "  $(gcc --version | head -1), glibc $(ldd --version | head -1 | awk '{print $NF}')"
+          } > out/BUILDINFO.txt
+          (cd out && sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: out/
+  release:
+    needs: linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir out && find dl -type f -exec cp {} out/ \;
+          {
+            echo "The Golem Engine — golem's own audio engine — built from [golem-engine](https://github.com/Goldoralf/golem-engine/tree/${{ inputs.ref }}) tag \`${{ inputs.ref }}\`"
+            echo "(built from Ardour, GPL-2.0-or-later; the source is that tag) by [.github/workflows/golem-engine.yml](.github/workflows/golem-engine.yml),"
+            echo "run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
+            echo "A self-contained package (the engine, its libraries, golem's watcher): golem's installer places it in \`~/opt/golem-engine\`."
+            echo "It needs the glibc of Ubuntu 22.04 or newer. Bundled system libraries keep their own licences."
+            echo; echo '```'; cat out/BUILDINFO.txt; echo; cat out/SHA256SUMS; echo '```'
+          } > notes.md
+          gh release create "${{ inputs.ref }}" out/* --repo "${{ github.repository }}" \
+            --title "Golem Engine ${{ inputs.ref }} (Linux)" --notes-file notes.md --latest=false --target "${{ github.sha }}"
