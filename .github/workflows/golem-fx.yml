@@ -2,8 +2,11 @@
 # Builds golem's own effects (golem-fx, https://github.com/Goldoralf/golem-fx) as VST3 for Linux, Windows and macOS
 # from one golem-fx tag, and publishes them as one release: one archive per OS, the factory presets as
 # .vstpreset (golem-fx-vstpresets.zip), SHA256SUMS, BUILDINFO.txt.
-# Run it by hand: Actions ▸ golem-fx ▸ Run workflow, with the golem-fx tag (e.g. 0.4); the release is golem-fx-<tag>.
+# It starts by itself for each new golem-fx tag (golem-fx-watch.yml). To run it by hand: Actions ▸ golem-fx ▸
+# Run workflow, with the golem-fx tag (e.g. 0.4); the release is golem-fx-<tag>.
 name: golem-fx
+# The watcher recognises a tag it has already launched by this title.
+run-name: golem-fx ${{ inputs.ref }}
 on:
   workflow_dispatch:
     inputs:

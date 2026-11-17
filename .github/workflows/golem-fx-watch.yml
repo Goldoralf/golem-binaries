@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Watches golem-fx (https://github.com/Goldoralf/golem-fx) for a new version tag and starts the golem-fx workflow
+# for it, so that tagging golem-fx is enough to get the release golem-fx-<tag>.
+# Only the highest tag is considered, and it is launched once: a tag whose build failed is not retried here
+# (run the golem-fx workflow by hand). A push from golem-fx would be immediate but needs a token stored there;
+# polling needs none. GitHub suspends a schedule after 60 days without a commit in this repository.
+name: golem-fx-watch
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+permissions:
+  actions: write
+  contents: read
+concurrency: golem-fx-watch
+jobs:
+  watch:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Launch the build of a tag that has neither a release nor a run
+        run: |
+          tag=$(gh api repos/Goldoralf/golem-fx/tags --paginate -q '.[].name' | grep -E '^[0-9]+(\.[0-9]+)+$' | sort -V | tail -n 1)
+          if [ -z "$tag" ]; then echo "no version tag in golem-fx"; exit 1; fi
+          if gh release view "golem-fx-$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "golem-fx $tag: already released"; exit 0
+          fi
+          runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow golem-fx.yml --limit 100 --json displayTitle \
+            -q "[.[] | select(.displayTitle == \"golem-fx $tag\")] | length")
+          if [ "$runs" != 0 ]; then echo "golem-fx $tag: already launched ($runs run(s)), not released yet"; exit 0; fi
+          echo "golem-fx $tag: launching the build"
+          gh workflow run golem-fx.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f "ref=$tag"
