@@ -35,7 +35,7 @@ jobs:
           P=mingw-w64-ucrt-x86_64
           missing=""
           for p in toolchain pkgconf python boost glib2 glibmm libsndfile curl libarchive fftw liblo taglib vamp-plugin-sdk \
-                   rubberband aubio portaudio cairomm pangomm serd sord sratom lilv lv2 libwebsockets cmake libusb \
+                   rubberband aubio portaudio jack2 cairomm pangomm serd sord sratom lilv lv2 libwebsockets cmake libusb \
                    libjpeg-turbo lrdf libxml2 cppunit libsamplerate soundtouch readline harfbuzz fribidi libpng libtiff \
                    fontconfig freetype libepoxy gettext itstool libogg libvorbis flac opus; do
             pacman -S --noconfirm --needed $P-$p > /tmp/pac.log 2>&1 || { missing="$missing $p"; echo "--- $p"; tail -2 /tmp/pac.log; }
@@ -75,6 +75,19 @@ jobs:
           grep -n -B3 -A8 -E "error:|undefined reference|fatal error" /tmp/build-full.log | head -1500 > /tmp/errors.txt || true
           grep -c -E "error:|undefined reference" /tmp/build-full.log || true
           ls -la build/luasession/ 2>/dev/null | tee /tmp/luasession.txt
+      - name: Start the engine once (dummy backend, golem's own launcher) — as far as it goes
+        working-directory: engine
+        run: |
+          set +e
+          mkdir -p /tmp/golem-root/presets
+          ls build/luasession/*.exe build/libs/backends/*/*.dll 2>/dev/null | head -8
+          # golem's launcher for the three systems (golem/engine/run.py): environment, PID file, then the engine
+          (timeout 90 python golem/engine/run.py "$(cygpath -m /tmp/golem-root)" "$(cygpath -m /tmp/golem-root)/sets/golem-engine" "None (Dummy)" > /tmp/engine-run.log 2>&1 &)
+          for i in $(seq 1 70); do grep -q "démarré" /tmp/golem-root/presets/.watch.log 2>/dev/null && break; sleep 1; done
+          echo "--- watcher log"; cat /tmp/golem-root/presets/.watch.log 2>/dev/null | tail -30
+          echo "--- engine output (last lines)"; tail -40 /tmp/engine-run.log
+          echo "--- status"; cat /tmp/golem-root/presets/.engine-status.json 2>/dev/null | head -c 600
+          cp /tmp/golem-root/presets/.watch.log /tmp/watch.log 2>/dev/null || true
       - name: Collect
         if: always()
         run: |
@@ -82,7 +95,7 @@ jobs:
           cp /tmp/missing.txt /tmp/configure.log /tmp/build-tail.log /tmp/luasession.txt out/ 2>/dev/null || true
           cp engine/build/config.log out/ 2>/dev/null || true
           cp engine/build/luasession/*.exe out/ 2>/dev/null || true
-          cp /tmp/errors.txt out/ 2>/dev/null || true
+          cp /tmp/errors.txt /tmp/engine-run.log /tmp/watch.log out/ 2>/dev/null || true
           gzip -c /tmp/build-full.log > out/build-full.log.gz 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: always()
