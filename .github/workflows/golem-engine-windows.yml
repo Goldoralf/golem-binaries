@@ -25,20 +25,26 @@ jobs:
     steps:
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64          # MINGW64 was deprecated in March 2026: its packages are gone
           update: true
           install: git base-devel
       - name: Dependencies (every one tried; a missing package is listed, not fatal)
         run: |
-          P=mingw-w64-x86_64
+          # the list of the Ardour forum's MSYS2 recipe (discourse.ardour.org/t/112412, posts 69-80), plus what golem's
+          # engine needs (libxml2, lv2, soundtouch…)
+          P=mingw-w64-ucrt-x86_64
           missing=""
-          for p in toolchain pkgconf python boost glibmm libsndfile curl libarchive liblo taglib vamp-plugin-sdk \
-                   rubberband fftw aubio libxml2 cppunit cairomm pangomm cairo pango liblrdf raptor2 libsamplerate lv2 \
-                   serd sord sratom lilv libwebsockets libusb portaudio soundtouch readline harfbuzz fribidi libpng \
-                   libjpeg-turbo libtiff fontconfig freetype libepoxy gettext itstool libogg libvorbis flac opus; do
-            pacman -S --noconfirm --needed $P-$p > /tmp/pac.log 2>&1 || { missing="$missing $p"; echo "--- $p"; tail -3 /tmp/pac.log; }
+          for p in toolchain pkgconf python boost glib2 glibmm libsndfile curl libarchive fftw liblo taglib vamp-plugin-sdk \
+                   rubberband aubio portaudio cairomm pangomm serd sord sratom lilv lv2 libwebsockets cmake libusb \
+                   libjpeg-turbo lrdf libxml2 cppunit libsamplerate soundtouch readline harfbuzz fribidi libpng libtiff \
+                   fontconfig freetype libepoxy gettext itstool libogg libvorbis flac opus; do
+            pacman -S --noconfirm --needed $P-$p > /tmp/pac.log 2>&1 || { missing="$missing $p"; echo "--- $p"; tail -2 /tmp/pac.log; }
           done
           echo "MISSING PACKAGES:$missing" | tee /tmp/missing.txt
+          gcc --version | head -1
+          # the recipe's two temporary pkg-config fixes, applied once
+          grep -q systre /ucrt64/lib/pkgconfig/portaudio-2.0.pc || sed -i '/^Libs:/ s/$/ -lsystre/' /ucrt64/lib/pkgconfig/portaudio-2.0.pc || true
+          grep -q sratom-0 /ucrt64/lib/pkgconfig/lilv-0.pc || sed -i '/^Libs:/ s/$/ -lsratom-0 -lsord-0 -lserd-0/' /ucrt64/lib/pkgconfig/lilv-0.pc || true
       - name: Sources
         run: |
           git config --global core.autocrlf false
@@ -49,15 +55,14 @@ jobs:
         run: |
           set +e
           # MinGW's Python says "win32", and waf then looks for MSVC first: name the compilers
-          export CC=gcc CXX=g++
-          python ./waf configure --dist-target=mingw --program-name="Golem Engine" --with-backends=dummy,portaudio --optimize \
-            --no-phone-home 2>&1 | tee /tmp/configure.log
+          python ./waf configure --check-c-compiler=gcc --check-cxx-compiler=g++ --dist-target=mingw --configdir=share \
+            --no-execstack --no-dr-mingw --cxx17 --ptformat --program-name="Golem Engine" --with-backends=dummy,portaudio \
+            --optimize 2>&1 | tee /tmp/configure.log
           echo "configure rc=${PIPESTATUS[0]}" | tee -a /tmp/configure.log
       - name: Build (as far as it goes)
         working-directory: engine
         run: |
           set +e
-          export CC=gcc CXX=g++
           python ./waf build -j4 -k 2>&1 | tail -400 | tee /tmp/build-tail.log
           echo "build rc=${PIPESTATUS[0]}" | tee -a /tmp/build-tail.log
           ls -la build/luasession/ 2>/dev/null | tee /tmp/luasession.txt
@@ -68,6 +73,7 @@ jobs:
           cp /tmp/missing.txt /tmp/configure.log /tmp/build-tail.log /tmp/luasession.txt out/ 2>/dev/null || true
           cp engine/build/config.log out/ 2>/dev/null || true
           cp engine/build/luasession/*.exe out/ 2>/dev/null || true
+          grep -n "error:" /tmp/build-tail.log | head -40 > out/errors.txt 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
