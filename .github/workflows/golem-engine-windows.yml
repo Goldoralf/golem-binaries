@@ -63,8 +63,12 @@ jobs:
         working-directory: engine
         run: |
           set +e
-          python ./waf build -j4 -k 2>&1 | tail -400 | tee /tmp/build-tail.log
-          echo "build rc=${PIPESTATUS[0]}" | tee -a /tmp/build-tail.log
+          python ./waf build -j4 -k > /tmp/build-full.log 2>&1
+          echo "build rc=$?" | tee /tmp/build-tail.log
+          tail -60 /tmp/build-full.log >> /tmp/build-tail.log
+          # every compiler or linker error with its context: what the port has to fix
+          grep -n -B3 -A8 -E "error:|undefined reference|fatal error" /tmp/build-full.log | head -1500 > /tmp/errors.txt || true
+          grep -c -E "error:|undefined reference" /tmp/build-full.log || true
           ls -la build/luasession/ 2>/dev/null | tee /tmp/luasession.txt
       - name: Collect
         if: always()
@@ -73,7 +77,8 @@ jobs:
           cp /tmp/missing.txt /tmp/configure.log /tmp/build-tail.log /tmp/luasession.txt out/ 2>/dev/null || true
           cp engine/build/config.log out/ 2>/dev/null || true
           cp engine/build/luasession/*.exe out/ 2>/dev/null || true
-          grep -n "error:" /tmp/build-tail.log | head -40 > out/errors.txt 2>/dev/null || true
+          cp /tmp/errors.txt out/ 2>/dev/null || true
+          gzip -c /tmp/build-full.log > out/build-full.log.gz 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
