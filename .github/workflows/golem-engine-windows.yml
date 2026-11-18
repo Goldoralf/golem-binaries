@@ -42,6 +42,11 @@ jobs:
           done
           echo "MISSING PACKAGES:$missing" | tee /tmp/missing.txt
           gcc --version | head -1
+          # lrdf.h includes <raptor.h>, which MSYS2 keeps under include/raptor2: make it visible (the only compile
+          # error of the fourth run, five times)
+          pacman -S --noconfirm --needed $P-raptor2 > /dev/null 2>&1 || true
+          ls /ucrt64/include/raptor2/ 2>/dev/null | head -3
+          [ -f /ucrt64/include/raptor.h ] || cp /ucrt64/include/raptor2/raptor*.h /ucrt64/include/ 2>/dev/null || true
           # the recipe's two temporary pkg-config fixes, applied once
           grep -q systre /ucrt64/lib/pkgconfig/portaudio-2.0.pc || sed -i '/^Libs:/ s/$/ -lsystre/' /ucrt64/lib/pkgconfig/portaudio-2.0.pc || true
           grep -q sratom-0 /ucrt64/lib/pkgconfig/lilv-0.pc || sed -i '/^Libs:/ s/$/ -lsratom-0 -lsord-0 -lserd-0/' /ucrt64/lib/pkgconfig/lilv-0.pc || true
