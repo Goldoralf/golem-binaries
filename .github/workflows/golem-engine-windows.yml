@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# EXPERIMENT — the Golem Engine on Windows (golem docs/install-v2.md, the port). Builds Goldoralf/golem-engine natively
+# with MSYS2/MinGW-w64 on a Windows runner and uploads what it produced (logs, and the headless engine if it built).
+# It publishes NO release: this workflow exists to find out what the port needs, one run at a time.
+# Ardour's own Windows builds are cross-compiled on Linux with a dependency stack built by tools that are not public;
+# MSYS2 packages most of that stack.
+name: golem-engine-windows (experiment)
+run-name: golem-engine-windows ${{ inputs.ref }}
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "golem-engine branch or tag to build"
+        required: true
+        default: main
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: git base-devel
+      - name: Dependencies (every one tried; a missing package is listed, not fatal)
+        run: |
+          P=mingw-w64-x86_64
+          missing=""
+          for p in toolchain pkgconf python boost glibmm libsndfile curl libarchive liblo taglib vamp-plugin-sdk \
+                   rubberband fftw aubio libxml2 cppunit cairomm pangomm cairo pango liblrdf raptor2 libsamplerate lv2 \
+                   serd sord sratom lilv libwebsockets libusb portaudio soundtouch readline harfbuzz fribidi libpng \
+                   libjpeg-turbo libtiff fontconfig freetype libepoxy gettext itstool libogg libvorbis flac opus; do
+            pacman -S --noconfirm --needed $P-$p > /dev/null 2>&1 || missing="$missing $p"
+          done
+          echo "MISSING PACKAGES:$missing" | tee /tmp/missing.txt
+      - name: Sources
+        run: |
+          git config --global core.autocrlf false
+          git clone https://github.com/Goldoralf/golem-engine.git engine
+          cd engine && git checkout "${{ inputs.ref }}" && git describe HEAD
+      - name: Configure
+        working-directory: engine
+        run: |
+          set +e
+          python ./waf configure --dist-target=mingw --program-name="Golem Engine" --with-backends=dummy,portaudio --optimize \
+            --no-phone-home 2>&1 | tee /tmp/configure.log
+          echo "configure rc=${PIPESTATUS[0]}" | tee -a /tmp/configure.log
+      - name: Build (as far as it goes)
+        working-directory: engine
+        run: |
+          set +e
+          python ./waf build -j4 -k 2>&1 | tail -400 | tee /tmp/build-tail.log
+          echo "build rc=${PIPESTATUS[0]}" | tee -a /tmp/build-tail.log
+          ls -la build/luasession/ 2>/dev/null | tee /tmp/luasession.txt
+      - name: Collect
+        if: always()
+        run: |
+          mkdir -p out
+          cp /tmp/missing.txt /tmp/configure.log /tmp/build-tail.log /tmp/luasession.txt out/ 2>/dev/null || true
+          cp engine/build/config.log out/ 2>/dev/null || true
+          cp engine/build/luasession/*.exe out/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: golem-engine-windows-experiment
+          path: out/
