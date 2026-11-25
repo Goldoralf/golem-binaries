@@ -2,6 +2,8 @@
 # Builds golem's own effects (golem-fx, https://github.com/Goldoralf/golem-fx) as VST3 for Linux, Windows and macOS
 # from one golem-fx tag, and publishes them as one release: one archive per OS, the factory presets as
 # .vstpreset (golem-fx-vstpresets.zip), SHA256SUMS, BUILDINFO.txt.
+# golem-fx-<os>.* is what golem installs and plays (no editor). From 0.7 on, the tag also builds every pedal WITH
+# its editor (gfx-ui, `cargo xtask dist`), the build a DAW opens: golem-fx-<os>-editor.*, beside it, never in its place.
 # It starts by itself for each new golem-fx tag (golem-fx-watch.yml). To run it by hand: Actions ▸ golem-fx ▸
 # Run workflow, with the golem-fx tag (e.g. 0.4); the release is golem-fx-<tag>.
 name: golem-fx
@@ -62,24 +64,33 @@ jobs:
           if [ "${{ runner.os }}" = macOS ]; then cmd=bundle-universal; else cmd=bundle; fi
           for p in $pkgs; do cargo xtask $cmd "$p" --release; done
           echo "$pkgs" > ../pedals.txt
+          # Keep golem's bundles apart: the editor build below writes target/bundled again.
+          mv target/bundled ../headless
+      - name: Every pedal with its editor (gfx-ui), for a DAW
+        working-directory: golem-fx
+        run: |
+          # Tags older than gfx-ui have no `xtask dist`: the release then goes out without the editor build.
+          if grep -q '"dist"' xtask/src/main.rs; then
+            cargo xtask dist --no-archive
+            mv "dist/vst3/${{ matrix.name }}" ../editor
+          fi
       - name: Ad-hoc code signature (macOS, required on Apple silicon)
         if: runner.os == 'macOS'
-        working-directory: golem-fx/target/bundled
-        run: for b in *.vst3; do codesign --force --deep --sign - "$b"; done
+        run: for b in headless/*.vst3 editor/*.vst3; do [ -e "$b" ] && codesign --force --deep --sign - "$b"; done; true
       - name: Archive
         run: |
           mkdir out
-          cd golem-fx/target/bundled
-          if [ "${{ runner.os }}" = Windows ]; then
-            7z a -tzip "../../../out/golem-fx-${{ matrix.name }}.zip" ./*.vst3 > /dev/null
-          else
-            tar czf "../../../out/golem-fx-${{ matrix.name }}.tar.gz" ./*.vst3
-          fi
-          cd ../../..
+          pack() { # <folder> <archive name without extension>
+            (cd "$1" && if [ "${{ runner.os }}" = Windows ]; then 7z a -tzip "../out/$2.zip" ./*.vst3 > /dev/null
+                        else tar czf "../out/$2.tar.gz" ./*.vst3; fi)
+          }
+          pack headless "golem-fx-${{ matrix.name }}"
+          if [ -d editor ]; then pack editor "golem-fx-${{ matrix.name }}-editor"; fi
           {
             echo "[${{ matrix.name }}] golem-fx $(git -C golem-fx rev-parse HEAD) (tag ${{ inputs.ref }}), runner ${{ matrix.os }}"
             echo "  $(rustc --version), $(cargo --version)"
-            echo "  $(ls golem-fx/target/bundled | grep -c '\.vst3$') VST3: $(tr '\n' ' ' < pedals.txt)"
+            echo "  $(ls headless | grep -c '\.vst3$') VST3: $(tr '\n' ' ' < pedals.txt)"
+            if [ -d editor ]; then echo "  -editor: $(ls editor | grep -c '\.vst3$') VST3 with the editor (gfx-ui)"; fi
           } > "out/BUILDINFO-${{ matrix.name }}.txt"
       - uses: actions/upload-artifact@v4
         with:
@@ -120,6 +131,10 @@ jobs:
             echo "(GPL-3.0-or-later; the source is that tag) by [.github/workflows/golem-fx.yml](.github/workflows/golem-fx.yml),"
             echo "run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
             echo "macOS bundles are universal (x86_64 + arm64) with an ad-hoc signature, not notarized."
+            if ls out/*-editor.* > /dev/null 2>&1; then
+              echo "\`golem-fx-<os>.*\`: what golem installs and plays (no editor). \`golem-fx-<os>-editor.*\`: the same pedals with"
+              echo "their editor (gfx-ui), for a DAW: unpack into the OS's VST3 folder."
+            fi
             if [ -f out/golem-fx-vstpresets.zip ]; then
               echo "\`golem-fx-vstpresets.zip\`: the factory presets as VST3 presets, a \`GoleM\` folder to unzip into the OS's VST3 preset folder"
               echo "(see [presets/README.md](https://github.com/Goldoralf/golem-fx/blob/${{ inputs.ref }}/presets/README.md#presets-in-a-daw))."
