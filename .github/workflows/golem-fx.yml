@@ -4,6 +4,7 @@
 # .vstpreset (golem-fx-vstpresets.zip), SHA256SUMS, BUILDINFO.txt.
 # golem-fx-<os>.* is what golem installs and plays (no editor). From 0.7 on, the tag also builds every pedal WITH
 # its editor (gfx-ui, `cargo xtask dist`), the build a DAW opens: golem-fx-<os>-editor.*, beside it, never in its place.
+# From 0.8.2 on, each pedal of that editor build also has its own archive, <crate>-<os>-editor.zip.
 # It starts by itself for each new golem-fx tag (golem-fx-watch.yml). To run it by hand: Actions ▸ golem-fx ▸
 # Run workflow, with the golem-fx tag (e.g. 0.4); the release is golem-fx-<tag>.
 name: golem-fx
@@ -86,11 +87,21 @@ jobs:
           }
           pack headless "golem-fx-${{ matrix.name }}"
           if [ -d editor ]; then pack editor "golem-fx-${{ matrix.name }}-editor"; fi
+          # From 0.8.2 on, each pedal alone too, with its editor (golem.fm/fx offers it on the pedal's card):
+          # <crate>-<os>-editor.zip (e.g. gfx-dist-linux-x86_64-editor.zip), a zip on every OS, holding <name>.vst3.
+          if [ -d editor ]; then
+            awk '/^\[gfx-/ { k = $0; gsub(/[][]/, "", k) } /^name *=/ { sub(/^name *= *"/, ""); sub(/".*$/, ""); print k "\t" $0 }' \
+              golem-fx/bundler.toml | while IFS=$'\t' read -r krate name; do
+              [ -d "editor/$name.vst3" ] || continue
+              if [ "${{ runner.os }}" = Windows ]; then (cd editor && 7z a -tzip "../out/$krate-${{ matrix.name }}-editor.zip" "./$name.vst3" > /dev/null)
+              else (cd editor && zip -qryX "../out/$krate-${{ matrix.name }}-editor.zip" "$name.vst3"); fi
+            done
+          fi
           {
             echo "[${{ matrix.name }}] golem-fx $(git -C golem-fx rev-parse HEAD) (tag ${{ inputs.ref }}), runner ${{ matrix.os }}"
             echo "  $(rustc --version), $(cargo --version)"
             echo "  $(ls headless | grep -c '\.vst3$') VST3: $(tr '\n' ' ' < pedals.txt)"
-            if [ -d editor ]; then echo "  -editor: $(ls editor | grep -c '\.vst3$') VST3 with the editor (gfx-ui)"; fi
+            if [ -d editor ]; then echo "  -editor: $(ls editor | grep -c '\.vst3$') VST3 with the editor (gfx-ui), $(ls out | grep -c '^gfx-.*-editor\.zip$') alone (<crate>-<os>-editor.zip)"; fi
           } > "out/BUILDINFO-${{ matrix.name }}.txt"
       - uses: actions/upload-artifact@v4
         with:
@@ -133,7 +144,8 @@ jobs:
             echo "macOS bundles are universal (x86_64 + arm64) with an ad-hoc signature, not notarized."
             if ls out/*-editor.* > /dev/null 2>&1; then
               echo "\`golem-fx-<os>.*\`: what golem installs and plays (no editor). \`golem-fx-<os>-editor.*\`: the same pedals with"
-              echo "their editor (gfx-ui), for a DAW: unpack into the OS's VST3 folder."
+              echo "their editor (gfx-ui), for a DAW: unpack into the OS's VST3 folder. \`<crate>-<os>-editor.zip\` (e.g."
+              echo "\`gfx-dist-linux-x86_64-editor.zip\`): one of those pedals alone."
             fi
             if [ -f out/golem-fx-vstpresets.zip ]; then
               echo "\`golem-fx-vstpresets.zip\`: the factory presets as VST3 presets, a \`GoleM\` folder to unzip into the OS's VST3 preset folder"
